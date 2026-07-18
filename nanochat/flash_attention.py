@@ -25,26 +25,48 @@ def _load_flash_attention_3():
     if not torch.cuda.is_available():
         return None
     try:
-        major, _ = torch.cuda.get_device_capability()
+        #major, _ = torch.cuda.get_device_capability()
         # FA3 kernels are currently compiled for Hopper (sm90), Ada (sm89) and Ampere (sm80/sm86)
         # Blackwell (sm100) needs SDPA fallback until FA3 is recompiled or FA4 is released
-        import os
-        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-        from kernels import get_kernel, has_kernel
+        #import os
+        #os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        #from kernels import get_kernel, has_kernel
         # The varunneal kernel obtains better results for H100/Hopper
+        #if major == 9:
+        #    hf_kernel = "varunneal/flash-attention-3"
+        #    return get_kernel(hf_kernel).flash_attn_interface
+        #else:
+        #    hf_kernel = "kernels-community/flash-attn3"
+        #    if has_kernel(hf_kernel):
+        #        return get_kernel(hf_kernel).flash_attn_interface
+        #    else:
+        #        return None
+
+    #except Exception:
+    #    return None
+        from kernels import get_kernel, has_kernel
+
+        major, _ = torch.cuda.get_device_capability()
+
         if major == 9:
-            hf_kernel = "varunneal/flash-attention-3"
-            return get_kernel(hf_kernel).flash_attn_interface
-        else:
-            hf_kernel = "kernels-community/flash-attn3"
-            if has_kernel(hf_kernel):
-                return get_kernel(hf_kernel).flash_attn_interface
-            else:
-                return None
+            return get_kernel("varunneal/flash-attention-3").flash_attn_interface
+
+        if has_kernel("kernels-community/flash-attn3"):
+            return get_kernel("kernels-community/flash-attn3").flash_attn_interface
 
     except Exception:
-        return None
+        pass
 
+    #
+    # 2. Fallback para flash-attn instalado
+    #
+    try:
+        import flash_attn
+        return flash_attn
+    except Exception:
+        pass
+
+    return None
 
 _fa3 = _load_flash_attention_3()
 HAS_FA3 = _fa3 is not None

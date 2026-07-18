@@ -1,0 +1,285 @@
+# nanochat-orin
+
+# nanochat for jetson orin nano 8G
+# working version: A, B, C e D resolvidos
+
+# A) Resolver o problema do torch não existir na arquitetura sm87
+# B) Resolver a dependencia do cudss
+# C) Resolver o problema dos paths
+
+# note: flash atention fa3 is not working with this setup.
+# D) Resolver o problema do fa3
+
+# 2026/07/14 - hoje o python -m scripts.chat_sft começou a falhar com error 400 a transferência de um dataset.
+# 2026/07/18 - upload do repo. Por confirmar que o erro desapareceu. Presumo que sim.
+
+###
+
+# requisitos
+# sudo apt install cudss
+# ver B) para instruções completas
+
+# ficheiros do nanochat modificados
+# pyproject.toml
+# nanochat/flash_attention.py
+
+# A) problema do torch
+# -------------------------------------
+# changes to pyproject.toml
+
+[project]
+name = "nanochat"
+version = "0.1.0"
+description = "the minimal full-stack ChatGPT clone"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "filelock>=3.19.0",
+    "kernels>=0.11.7; platform_machine != 'aarch64'",
+    "numpy>=1.26.0",
+    "psutil>=7.1.0",
+    "pyarrow>=21.0.0",
+    "rustbpe>=0.1.0",
+    "tiktoken>=0.11.0",
+    "torch>=2.9",
+    "wandb>=0.21.3",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.1.0",
+    "matplotlib>=3.10.8",
+    "pytest>=8.0.0",
+    "python-dotenv>=1.2.1",
+]
+
+[project.optional-dependencies]
+jetson = [
+    "flash-attn==2.8.3",
+    "triton>=3.5.1",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "platform_machine != 'aarch64'" },
+    { index = "jetson", marker = "platform_machine == 'aarch64'" },
+]
+
+flash-attn = [
+    { index = "jetson" }
+]
+
+triton = [
+    { index = "jetson" }
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "jetson"
+url = "https://pypi.jetson-ai-lab.io/jp6/cu126"
+explicit = true
+
+[tool.uv]
+default-groups = []
+
+
+
+###
+
+# B) problema do cudss
+# -------------------------------------
+# nanochat orin requirements
+# Add Jetson AI Lab PyTorch
+uv sync --extra jetson
+
+# Install cuDSS (required by Jetson AI Lab PyTorch >=2.11)
+wget https://developer.download.nvidia.com/compute/cudss/0.6.0/local_installers/cudss-local-tegra-repo-ubuntu2204-0.6.0_0.6.0-1_arm64.deb
+
+sudo dpkg -i cudss-local-tegra-repo-ubuntu2204-0.6.0_0.6.0-1_arm64.deb
+
+# 72E455D5 may be * wildcard
+sudo cp /var/cudss-local-tegra-repo-ubuntu2204-0.6.0/cudss-local-tegra-72E455D5-keyring.gpg /usr/share/keyrings/
+
+sudo apt update
+apt search cudss
+sudo apt install cudss
+ldconfig -p | grep cudss
+
+
+# test
+source .venv/bin/activate
+
+python - <<'EOF'
+import torch
+
+print("torch:", torch.__version__)
+print("cuda:", torch.version.cuda)
+print("available:", torch.cuda.is_available())
+print("device:", torch.cuda.get_device_name(0))
+
+x = torch.randn(10, device="cuda")
+print(x)
+
+x.normal_(0,1)
+print(x)
+EOF
+
+###
+
+
+
+
+# C) problema dos paths
+# -------------------------------------
+export CUDA_HOME=/usr/local/cuda
+export CUDA_PATH=/usr/local/cuda
+export CPATH=/usr/local/cuda/include${CPATH:+:$CPATH}
+export PATH=/usr/local/cuda/bin:$PATH
+export TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+
+###
+
+
+# D) Resolver o problema do fa3
+# -------------------------------------
+# changes to pyproject.toml
+
+# "kernels>=0.11.7; platform_machine != 'aarch64'",
+#  change to
+# "kernels>=0.11.7",
+
+nano nanochat/flash_attention.pydef _load_flash_attention_3()
+# on
+# comment out
+        #major, _ = torch.cuda.get_device_capability()
+        # FA3 kernels are currently compiled for Hopper (sm90), Ada (sm89) and Ampere (>
+        # Blackwell (sm100) needs SDPA fallback until FA3 is recompiled or FA4 is relea>
+        #import os
+        #os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+        #from kernels import get_kernel, has_kernel
+        # The varunneal kernel obtains better results for H100/Hopper
+        #if major == 9:
+        #    hf_kernel = "varunneal/flash-attention-3"
+        #    return get_kernel(hf_kernel).flash_attn_interface
+        #else:
+        #    hf_kernel = "kernels-community/flash-attn3"
+        #    if has_kernel(hf_kernel):
+        #        return get_kernel(hf_kernel).flash_attn_interface
+        #    else:
+        #        return None
+
+    #except Exception:
+    #    return None
+
+# add after
+        from kernels import get_kernel, has_kernel
+
+        major, _ = torch.cuda.get_device_capability()
+
+        if major == 9:
+            return get_kernel("varunneal/flash-attention-3").flash_attn_interface
+
+        if has_kernel("kernels-community/flash-attn3"):
+            return get_kernel("kernels-community/flash-attn3").flash_attn_interface
+
+    except Exception:
+        pass
+
+    #
+    # 2. Fallback para flash-attn instalado
+    #
+    try:
+        import flash_attn
+        return flash_attn
+    except Exception:
+        pass
+
+    return None
+
+
+
+
+# ####################################
+#
+# supa beginna nanochat smoke test
+# https://github.com/karpathy/nanochat/discussions
+
+cd nanochat-orin
+uv venv
+uv sync --extra jetson
+source .venv/bin/activate
+
+export NANOCHAT_BASE_DIR=/home/inaciose/ws/nanochat-orin/cache/smoke
+mkdir -p "$NANOCHAT_BASE_DIR"
+
+ll /home/inaciose/ws/nanochat-orin/cache/smoke
+
+export CUDA_HOME=/usr/local/cuda
+export CUDA_PATH=/usr/local/cuda
+export CPATH=/usr/local/cuda/include${CPATH:+:$CPATH}
+export PATH=/usr/local/cuda/bin:$PATH
+export TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+
+python -m nanochat.dataset -n 1
+
+python -m scripts.tok_train --max-chars=2000000 --doc-cap=2000 --vocab-size=2048
+
+python -m scripts.tok_eval
+
+
+python -m scripts.base_train \
+  --depth=2 \
+  --aspect-ratio=32 \
+  --head-dim=32 \
+  --window-pattern=L \
+  --max-seq-len=128 \
+  --device-batch-size=1 \
+  --total-batch-size=128 \
+  --eval-every=-1 \
+  --core-metric-every=-1 \
+  --sample-every=-1 \
+  --save-every=-1 \
+  --num-iterations=2 \
+  --run=dummy \
+  --model-tag=smoke \
+  --device-type=cuda
+
+python -m scripts.base_eval \
+  --eval bpb,sample \
+  --model-tag smoke \
+  --device-batch-size 1 \
+  --split-tokens 512 \
+  --device-type cuda
+
+curl -L -o "$NANOCHAT_BASE_DIR/identity_conversations.jsonl" \
+  https://karpathy-public.s3.us-west-2.amazonaws.com/identity_conversations.jsonl
+
+python -m scripts.chat_sft \
+  --model-tag smoke \
+  --max-seq-len 128 \
+  --device-batch-size 1 \
+  --total-batch-size 128 \
+  --eval-every -1 \
+  --chatcore-every -1 \
+  --num-iterations 1 \
+  --mmlu-epochs 0 \
+  --gsm8k-epochs 0 \
+  --load-optimizer 0 \
+  --run dummy \
+  --device-type cuda
+
+python -m scripts.chat_cli --model-tag smoke --device-type cuda -p "Hello"
